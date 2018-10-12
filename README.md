@@ -225,6 +225,138 @@ typedef pcl::PointXYZRGBA PointT;  // The point type used for input
 
 ```
 
+> segmentation_helpers.h 分割类头文件 主要判断 两点的凸凹性 用于 点云分割
+```c
+
+// 低层次视觉—点云分割（基于凹凸性）=====================================================================================
+// 对于二维图像而言，其凹凸性较难描述，但对于三维图像而言，凹凸几乎是与生俱来的性质。
+// LCCP是Locally Convex Connected Patches的缩写，翻译成中文叫做 ”局部凸连接打包一波带走:1.基于超体聚类的过分割。2.在超体聚类的基础上再聚类。
+// ====== 超体聚类 http://www.cnblogs.com/ironstark/p/5013968.html
+// LCCP 凹凸性聚类 https://www.cnblogs.com/ironstark/p/5027269.html 
+// LCCP算法在相似物体场景分割方面有着较好的表现，对于颜色类似但棱角分明的物体可使用该算法。（比如X同学仓库里那一堆纸箱）。
+
+// CPC方法的全称为Constrained Planar Cuts，出自论文：Constrained Planar Cuts - Object Partitioning for Point Clouds 。
+// 和LCCP方法不同，此方法的分割对象是object。此方法能够将物体分成有意义的块：比如人的肢体等。
+// CPC方法可作为AI的前处理，作为RobotVision还是显得有些不合适。
+// 但此方法不需要额外训练，自底向上的将三维图像分割 成有明确意义部分，是非常admirable的。
+// 和其他基于凹凸性的方法相同，本方法也需要先进行超体聚类。在完成超体聚类之后，采用和LCCP相同的凹凸性判据获得各个块之间的凹凸关系。
+// 在获得凹凸性之后，CPC方法所采取的措施是不同的。其操作称为 半全局分割 。
+// 在分割之前，首先需要生成 EEC(Euclidean edge cloud)， EEC的想法比较神奇，因为凹凸性定义在相邻两个”片“上，
+// 换言之，定义在连接相邻两“片”的edge上。将每个edge抽象成一个点云，则得到了附带凹凸信息的点云。
+// 如图所示，左图是普通点云，但附带了邻接和凹凸信息。右边是EEC，对凹边赋权值1，其他为0。 此方法称作  weighted RanSac。
+// https://images2015.cnblogs.com/blog/710098/201512/710098-20151208163052980-70483439.jpg
+// 显而易见，某处如果蓝色的点多，那么就越 凹，就越应该切开（所谓切开实际上是用平面划分）。
+// 问题就转化为利用蓝点求平面了。利用点云求一个最可能的平面当然需要请出我们的老朋友 RanSaC . 
+// 但此处引入一个评价函数，用于评价此次分割的 优良程度Sm,Pm 是EEC中的点.
+
+
+// 在PCL中CPC类继承自 LCCP 类，但是这个继承我觉得不好，这两个类之间并不存在抽象与具体的关系，只是存在某些函数相同而已。
+// 不如多设一个 凹凸分割类 作为CPC类与LCCP类的父类，所有的输入接口等都由凹凸分割类提供。
+// 由CPC算法和LCCP算法继承凹凸类，作为 凹凸分割 的具体实现。
+// 毕竟和 凹凸分割 有关的算法多半是对整体进行分割，和其他点云分割算法区别较大。
+
+
+// RGB-D Object Dataset ： http://rgbd-dataset.cs.washington.edu/
+
+bool isConvex(Eigen::Vector3f p1, Eigen::Vector3f n1, Eigen::Vector3f p2, Eigen::Vector3f n2, float seed_resolution, float voxel_resolution)
+{
+    float concavity_tolerance_threshold = 10;
+    const Eigen::Vector3f& source_centroid = p1; // 源点云中心
+    const Eigen::Vector3f& target_centroid = p2;  // 目标中心
+
+    const Eigen::Vector3f& source_normal = n1;   // 源点云法线
+    const Eigen::Vector3f& target_normal = n2;    // 目标点云法线
+
+    if (concavity_tolerance_threshold < 0)		return (false);
+
+    bool is_convex = true;  // 凸???
+    bool is_smooth = true;// 平滑
+
+    float normal_angle = pcl::getAngle3D(source_normal, target_normal, true);// 两法线 角度差值 true 表示 返回 度
+    //  Geometric comparisons  几何比较 
+    Eigen::Vector3f vec_t_to_s, vec_s_to_t;// 中心位置 平移量
+
+    vec_t_to_s = source_centroid - target_centroid;// 目标 到 源 平移量（后面的向量 到 前面的向量）
+    vec_s_to_t = -vec_t_to_s;// 源 到 目标 平移量
+    
+    // 两向量叉积 向量积
+    Eigen::Vector3f ncross;
+    ncross = source_normal.cross (target_normal);
+
+    // 平滑检测======================================================================
+    // Smoothness Check: Check if there is a step between adjacent patches
+    bool use_smoothness_check = true;
+    float smoothness_threshold = 0.1;
+    if (use_smoothness_check)
+    {
+        float expected_distance = ncross.norm () * seed_resolution; // 期望的距离 ： 叉积向量 长度 × 种子点精度
+        float dot_p_1 = vec_t_to_s.dot (source_normal);
+        float dot_p_2 = vec_s_to_t.dot (target_normal);
+        float point_dist = (std::fabs (dot_p_1) < std::fabs (dot_p_2)) ? std::fabs (dot_p_1) : std::fabs (dot_p_2); // 实际距离: 最小的一个为两个带有方向的点的距离
+        const float dist_smoothing = smoothness_threshold * voxel_resolution;// 补偿距离
+
+        if (point_dist > (expected_distance + dist_smoothing)) // 距离过大，不平滑!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        {
+            is_smooth &= false; 
+        }
+    }
+
+// 凸凹关系判断=======================================================
+// 点云完成超体聚类之后，对于过分割的点云需要计算不同的块之间凹凸关系。
+// 凹凸关系通过 CC（Extended Convexity Criterion） 和 SC （Sanity criterion）判据来进行判断。
+// 其中 CC 利用相邻两片中心连线向量与法向量夹角来判断两片是凹是凸。
+// 显然，如果图中a1>a2则为凹，反之则为凸。
+//                   a2  |
+//                  ------|------                         ____|——|
+//           a1 |                 |                              |        |
+//          ____|        凸     |               __|______| 凹 |
+//                 |__________|              |______________|
+// https://images2015.cnblogs.com/blog/710098/201512/710098-20151207170359699-415614858.jpg
+
+// 考虑到测量噪声等因素，需要在实际使用过程中引入门限值（a1需要比a2大出一定量）来滤出较小的凹凸误判。
+// 此外，为去除一些小噪声引起的误判，还需要引入“第三方验证”，如果某块和相邻两块都相交，则其凹凸关系必相同。
+
+
+// 如果相邻两面中，有一个面是单独的，cc判据是无法将其分开的。
+// 举个简单的例子，两本厚度不同的书并排放置，视觉算法应该将两本书分割开。如果是台阶，则视觉算法应该将台阶作为一个整体。
+// 本质上就是因为厚度不同的书存在surface-singularities。为此需要引入SC判据，来对此进行区分。
+// Sanity Criterion: Check if definition convexity/concavity makes sense for connection of given patches
+// 如图所示，相邻两面是否真正联通，是否存在单独面，与θ角（中心点连线（x1-x2） 与两平面交线（n1-n2） 的 夹角）有关，θ角越大，则两面真的形成凸关系的可能性就越大。
+// 据此，可以设计SC判据：
+// https://images2015.cnblogs.com/blog/710098/201512/710098-20151207172059308-1314515634.jpg
+
+    bool use_sanity_check = true;
+    float intersection_angle =  pcl::getAngle3D (ncross, vec_t_to_s, true); // 连线 和 交线 夹角 
+    float min_intersect_angle = (intersection_angle < 90.) ? intersection_angle : 180. - intersection_angle;// 0～90
+
+    float intersect_thresh = 57. * 1. / (1. + exp (-0.3 * (normal_angle - 33.)));// 阈值
+    if (min_intersect_angle < intersect_thresh && use_sanity_check)// 夹角过小为  单独面 而不是联通面(形成凸/凹空间体)
+    {
+        is_convex &= false;
+    }
+
+// Convexity Criterion: Check if connection of patches is convex. If this is the case the two SuperVoxels should be merged.
+    if ((pcl::getAngle3D(vec_t_to_s, source_normal) - pcl::getAngle3D(vec_t_to_s, target_normal)) <= 0)// a1 < a2 为凸关系
+    {
+        is_convex &= true;  // connection convex
+    }
+    else
+    {
+        is_convex &= (normal_angle < concavity_tolerance_threshold);  // concave connections will be accepted  if difference of normals is small
+    }
+    return (is_convex && is_smooth);
+
+
+// 在标记完各个小区域的凹凸关系后，则采用区域增长算法将小区域聚类成较大的物体。此区域增长算法受到小区域凹凸性限制，既：
+
+// 只允许区域跨越凸边增长。
+// 至此，分割完成，在滤去多余噪声后既获得点云分割结果。
+// 此外：考虑到RGB-D图像随深度增加而离散，难以确定八叉树尺寸，故在z方向使用对数变换以提高精度。
+// 分割结果如图： https://images2015.cnblogs.com/blog/710098/201512/710098-20151207183006543-245415125.jpg
+}
+
+
+```
 
 
 
