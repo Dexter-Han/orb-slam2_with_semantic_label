@@ -11,6 +11,7 @@
 # 相比 orbslam2-pc 变动的地方
 
 > 1. 头文件部分 
+```c
   include/gco-v3.0   图割能量最小 software for energy minimization with graph cuts
   include/config.h   添加了一个参数配置类
   include/lsa_tr.h   基于图割方法的图像分割，是一种重要的图像分割个方法  最大流-最小割 MAXFLOW-MINCUT
@@ -18,7 +19,7 @@
   include/pointcloudmapping.h    点云建图程序也有所修改    主要融合部分!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   include/segmentation.h
   include/segmentation_helpers.h
-
+```
 
 > config.h
 ```c
@@ -185,17 +186,44 @@ protected:
   pcl::StatisticalOutlierRemoval<PointT> sor;// 创建统计学滤波器对象
 
 }
-   
-   
-   
-  
-  
-  
-  
 
 
 ```
 
+> segmentation.h 分割类头文件
+```c
+// 重要头文件
+// Graph cuts
+#include "gco-v3.0/GCoptimization.h"
+
+// LSA TR Optimisation
+#include "lsa_tr.h"
+
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/segmentation/supervoxel_clustering.h>
+// 超体聚类 http://www.cnblogs.com/ironstark/p/5013968.html
+
+#include "segmentation_helpers.h"
+// Boost
+#include <boost/format.hpp>
+#include <boost/config.hpp>
+#include <boost/graph/adjacency_list.hpp>       // 图 相关算法
+#include <boost/graph/connected_components.hpp>
+#include <boost/math/special_functions/fpclassify.hpp>
+
+typedef pcl::PointXYZRGBA PointT;  // The point type used for input
+
+    class Segmentation{
+    public:
+        ... 
+        void doSegmentation(); // 分割算法!!!!!!!!!!!!!!!!!!!!!!!!!!
+        pcl::PointCloud<pcl::PointXYZL>::Ptr getSegmentedPointCloud(){return segmented_cloud_ptr_;}// 
+    private:
+        Config config_;
+        pcl::PointCloud<PointT>::Ptr input_cloud_ptr_; // 输入点云为 普通的xyzrgba点云
+        pcl::PointCloud<pcl::PointXYZL>::Ptr segmented_cloud_ptr_;// 分割算法输出类 输出点云 为xyzl点云，带标签
+
+```
 
 
 
