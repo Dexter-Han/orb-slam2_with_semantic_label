@@ -10,7 +10,7 @@
 
 # 相比 orbslam2-pc 变动的地方
 
-> 1. 头文件部分 
+## 1. 头文件部分 
 ```c
   include/gco-v3.0   图割能量最小 software for energy minimization with graph cuts
   include/config.h   添加了一个参数配置类
@@ -141,7 +141,7 @@ public:
   enum cloudType
   {RAW = 0, FILTERED = 1, REMOVAL = 2, CLUSTER = 3}; // 增加点云类型的一个枚举变量
   
-  std::vector<cv::Scalar> colors;// 图像颜色，图像个通道值。。。。用处大大滴
+  std::vector<cv::Scalar> colors;// 图像颜色，图像个通道值。。。。用处大大滴。。。目标检测不同类别显示不同颜色
   
 // 增添 一大波函数 ...
 
@@ -306,11 +306,11 @@ bool isConvex(Eigen::Vector3f p1, Eigen::Vector3f n1, Eigen::Vector3f p2, Eigen:
 // 凹凸关系通过 CC（Extended Convexity Criterion） 和 SC （Sanity criterion）判据来进行判断。
 // 其中 CC 利用相邻两片中心连线向量与法向量夹角来判断两片是凹是凸。
 // 显然，如果图中a1>a2则为凹，反之则为凸。
-//                   a2  |
-//                  ------|------                         ____|——|
-//           a1 |                 |                              |        |
-//          ____|        凸     |               __|______| 凹 |
-//                 |__________|              |______________|
+//            a2    |
+//            ------|------                    ____|—— |
+//           a1 |         |                        |   |
+//          ____|   凸    |               __|______|凹 |
+//              |_________|              |_____________|
 // https://images2015.cnblogs.com/blog/710098/201512/710098-20151207170359699-415614858.jpg
 
 // 考虑到测量噪声等因素，需要在实际使用过程中引入门限值（a1需要比a2大出一定量）来滤出较小的凹凸误判。
@@ -357,6 +357,34 @@ bool isConvex(Eigen::Vector3f p1, Eigen::Vector3f n1, Eigen::Vector3f p2, Eigen:
 
 
 ```
+
+## 2.源文件部分
+> pointcloudmapping.cc 修改
+```c
+// 增添的一大堆都文件，和 pointcloudmapping.h 有部分重复，都可以放在，pointcloudmapping.h 头文件处
+
+// yolov3 目标检测需要使用 GPU加速
+#ifdef GPU
+#include "cuda_runtime.h"
+#include "curand.h"
+#include "cublas_v2.h"
+#endif
+
+
+
+// 主要修改函数 ======
+void PointCloudMapping::viewer()
+{
+// 前面等待 关键帧更新 线程
+
+// 后面遍例每一个关键帧先执行 目标检测
+// 在彩色图上 按照检测结果画填充 不同颜色(和类别物体 有一一对应关系)的 矩形
+// 按照 带有分类矩形框的 彩色图 和 深度图 产生 xyzrgba 点云，
+// 后面的到 总的点云后根据 rgb颜色来区分不同种类物体， 形成 xyzl 带有标签的点云
+}
+
+```
+
 
 
 
