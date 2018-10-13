@@ -2,6 +2,8 @@
 # orb-slam2_with_semantic_label  yolo-v2 语义-slam
 
 # 结合要点!!!!!!
+    主要就是 在 使用 关键帧的位姿 和 彩色图 、深度图时先使用 目标检测对彩色图进行检测
+    对彩色图对应物体的 矩形框上 填充不同的颜色 后在生成 点云，并加入到 总的点云地图中。
  
     整合orbslam2-pc 和 yolov3-se
 [orbslam2-pc](https://github.com/Ewenwan/ORBSLAM2_with_pointcloud_map)
@@ -867,7 +869,112 @@ void Segmentation::doSegmentation()
 
 ```
 
+## 分割算法 测试文件 segmentation_test.cc
+```c
+int main(int argc, char** argv)
+{
+  
+  Segmentation seg;
+  Config config;
+  config.noise_threshold = 0.01;     // 1cm
+  config.voxel_resolution = 0.008f;// 0.8cm
+  config.seed_resolution = 0.08f;   // 8cm
+  config.min_plane_area = 0.01f;    // m^2;
+  config.max_curvature = 0.01;
+  seg.setConfig(config);
 
+  PCL_INFO ("Loading pointcloud\n");
+  pcl::PointCloud<PointT>::Ptr input_cloud_ptr (new pcl::PointCloud<PointT>);
+
+
+  /// Get pcd path from command line
+// 1. 从命令行载入 点云文件==================
+  std::string pcd_filename = argv[1];
+  std::string ext("");
+  ext = pcd_filename;
+  size_t sep = ext.find_last_of ('.');
+  if (sep != std::string::npos)
+  ext = ext.substr (sep+1);
+
+  if (ext.compare("pcd") == 0){
+    if (pcl::io::loadPCDFile (pcd_filename, *input_cloud_ptr)){
+      PCL_ERROR ("ERROR: Could not read input point cloud %s.\n", pcd_filename.c_str ());
+      return (3);
+    }
+  }
+
+  if (ext.compare("ply") == 0){
+    if (pcl::io::loadPLYFile<PointT> (pcd_filename, *input_cloud_ptr)){
+      PCL_ERROR ("ERROR: Could not read input point cloud %s.\n", pcd_filename.c_str ());
+      return (3);
+    }
+  }
+
+// 2. 去除 nan点===========================
+  std::vector< int > index;
+  if (!input_cloud_ptr->is_dense){
+    PCL_WARN("Point data not dense, eating NaNs\n");
+    pcl::removeNaNFromPointCloud<PointT>(*input_cloud_ptr,*input_cloud_ptr,index);
+    PCL_INFO ("Done making cloud\n");
+  }
+  std::cerr << "Number of points: " << input_cloud_ptr->size() << std::endl;
+
+// 3. 体素格滤波============================
+  pcl::PointCloud<PointT>::Ptr cloud_filtered (new pcl::PointCloud<PointT>);
+  pcl::VoxelGrid<PointT> sor;
+  sor.setInputCloud(input_cloud_ptr);
+  sor.setLeafSize (0.005f, 0.005f, 0.005f);
+  sor.filter(*cloud_filtered);
+  std::cerr << "Number of points after filtered " << cloud_filtered->size() << std::endl;
+
+// 4. 点云聚类分割==============================
+  seg.setPointCloud(input_cloud_ptr);
+  seg.doSegmentation();
+  pcl::PointCloud<pcl::PointXYZL>::Ptr segmented_cloud_ptr;// 带标签
+  segmented_cloud_ptr=seg.getSegmentedPointCloud();
+
+// 5. 保存分割后的点云===========================
+  bool output_specified = pcl::console::find_switch (argc, argv, "-o");
+  if (output_specified)
+  {
+    // Check output already exists. Create outputname if not given
+    std::string outputname ("");
+    pcl::console::parse (argc, argv, "-o", outputname);
+    // If no filename is given, get output filename from inputname (strip seperators and file extension)
+    if (outputname.empty () || (outputname.at (0) == '-'))
+    {
+      outputname = pcd_filename;
+      size_t dot = outputname.find_last_of ('.');
+      if (dot != std::string::npos)
+      outputname = outputname.substr (0, dot);
+    }
+
+    outputname+="_seg.pcd";
+    PCL_INFO ("Saving output\n");
+    bool save_binary_pcd = false;
+    pcl::io::savePCDFile (outputname, *segmented_cloud_ptr, save_binary_pcd);
+  }
+
+  // 可视化分割后的点云================================
+  bool show_visualization = (not pcl::console::find_switch (argc, argv, "-novis"));
+  if (show_visualization)
+  {
+    /// Configure Visualizer
+    pcl::visualization::PCLVisualizer::Ptr viewer (new pcl::visualization::PCLVisualizer ("3D Viewer"));
+    viewer->setBackgroundColor (0, 0, 0);
+    viewer->addPointCloud (segmented_cloud_ptr, "Segmented point cloud");
+
+    PCL_INFO ("Loading viewer\n");
+    while (!viewer->wasStopped ())
+    {
+      viewer->spinOnce (100);
+    }
+  }
+  return 0;
+}
+
+
+```
 
 **Authors:** Xuxiang Qi(qixuxiang16@nudt.edu.cn),Shaowu Yang(shaowu.yang@nudt.edu.cn),Yuejin Yan(nudtyyj@nudt.edu.cn)
 
